@@ -1,0 +1,16 @@
+{
+  "task_id": "_template",
+  "stage": "explore",
+  "stages_done": [],
+  "segment_index": 0,
+  "segments": [],
+  "worktree": "",
+  "skills_used": [],
+  "budget": { "llm_calls": 0, "tokens": 0, "usd": 0.0 },
+  "fingerprint_mode": "file_bytes",
+  "doc_id": "",
+  "agent": "codex",
+  "heal_attempts": 0,
+  "updated_at": 0,
+  "extras": {}
+}

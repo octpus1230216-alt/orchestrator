@@ -1,0 +1,9 @@
+# Python 缓存
+__pycache__/
+*.py[cod]
+
+# 编排器隔离工作区（git worktree 产物，勿入库）
+.orch-worktrees/
+
+# 运行期凭据
+.env

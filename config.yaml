@@ -1,0 +1,133 @@
+# orchestrator/config.yaml
+# 多 agent 可插拔本地工作流编排器全局配置。
+# 新增一家 coding agent：adapters/ 下加一个薄文件 + 本文件 adapters 下加一条 command_template。
+
+version: 1
+
+# ===================== 本批基础段 =====================
+
+# LLM 统一客户端（密钥一律 env: 引用环境变量，不写进本文件）
+# 离线试跑：把 model 改为 mock，或使用 cli 的 --mock-llm
+# 计费（审计 R3）：可选 price_per_1k_in / price_per_1k_out（USD/1k token，缺省 0 → usd 恒 0）；
+# 真实响应无 usage 时按字符估算并打 [billing] 警告，不静默按 0。
+llm:
+  strong: { model: gpt-5,      base_url: env:OPENAI_BASE_URL, api_key: env:OPENAI_API_KEY }   # price_per_1k_in: 2.5
+  fast:   { model: gpt-5-mini, base_url: env:OPENAI_BASE_URL, api_key: env:OPENAI_API_KEY }   # price_per_1k_in: 0.6
+  temperature: 0.2
+  max_output_tokens: 4096
+  request_timeout_seconds: 120
+
+agent: codex                # 默认 coding agent，可被 --agent 覆盖
+max_retry: 3                # heal 失败回灌轮次上限（分段模式下逐段生效）
+timeouts: { agent: 1800, verify_cmd: 600 }
+verify_parallel: false      # 预留：本批恒串行（见 audit-report R7；配 true 会启动提示，不会静默生效）
+
+# 分段喂入（segment dispatch）：whole | per_segment | auto（默认）
+# auto：prompt.md 字符数 < segment_threshold → whole；否则逐段自动喂入；--segment 可覆盖
+# 审计 R5：segment_threshold 是全链唯一阈值源（判定单点 dispatch.resolve_segment_mode）；
+# 旧 compile.segment_threshold_chars 双源已删除，不要再引入第二键
+segment_mode: auto
+segment_threshold: 6000
+
+# 多 skill：skills/ 目录下多个能力库；explicit 非空 → 只用列出的，
+# 否则 auto_select → explore/compile 按任务标签自动选用；单一 skills.md 仍兼容
+skills:
+  dir: skills/
+  auto_select: true
+  explicit: []
+
+# Adapter 规格：模板写 config，adapter 只做 {prompt_file}/{prompt_inline} 变量替换 + subprocess。
+# capabilities 不满足任务需求时，dispatch 会提示换 agent 或降级。
+# type（审计 R8，base 真分派）：cli（缺省，走 subprocess）| manual（无法自动执行，
+# 给人工步骤）| http（本批明确 NotImplementedError）；未知值加载即抛，不静默当 cli。
+adapters:
+  codex:
+    command_template: "codex exec --prompt-file {prompt_file}"
+    install_hint: "npm install -g @openai/codex"
+    capabilities: { supports_prompt_file: true,  supports_streaming: false, returns_diff: true,  supports_write_requests: false, supports_resume: false }
+  qoder:
+    command_template: "qoder exec --prompt-file {prompt_file}"
+    install_hint: "安装 Qoder CLI 后重试"
+    capabilities: { supports_prompt_file: true,  supports_streaming: false, returns_diff: true,  supports_write_requests: false, supports_resume: true }
+  trae:
+    type: manual              # 事实归位（审计 R8）：无编程 CLI，run 时给可操作人工步骤
+    command_template: ""    # TODO: 配置 Trae 自动化命令模板（留空则 run 抛清晰异常）
+    install_hint: "Trae 暂无可编程 CLI；请改用 codex/qoder/claude_code/aider"
+    capabilities: { supports_prompt_file: false, supports_streaming: false, returns_diff: false, supports_write_requests: false, supports_resume: false }
+  cursor:
+    command_template: "cursor-agent run --file {prompt_file}"
+    install_hint: "安装 Cursor CLI（cursor-agent）后重试"
+    capabilities: { supports_prompt_file: true,  supports_streaming: true,  returns_diff: false, supports_write_requests: false, supports_resume: false }
+  claude_code:
+    command_template: "claude -p {prompt_inline}"
+    install_hint: "npm install -g @anthropic-ai/claude-code"
+    capabilities: { supports_prompt_file: false, supports_streaming: true,  returns_diff: true,  supports_write_requests: false, supports_resume: false }
+  aider:
+    command_template: "aider --message-file {prompt_file}"
+    install_hint: "python -m pip install aider-chat"
+    capabilities: { supports_prompt_file: true,  supports_streaming: false, returns_diff: true,  supports_write_requests: false, supports_resume: false }
+
+git:
+  remote: origin
+  main_branch: main
+  auto_push: true
+  open_pr: true
+  base_branch: main
+  pr:
+    enabled: true
+    draft_by_default: true
+    title_prefix: "[orch]"
+
+# ===================== 既有治理段 =====================
+
+# 指纹策略（详见 core/fingerprint.py 模块注释：为何 file_bytes 会把“重新导出”判为新文档）
+# 生产语义保持 mode: file_bytes（需求明确 sha256(file_bytes)）；
+# 需求变为“跨导出保持 doc_id 稳定”时改为 mode: content，调用方不改。
+fingerprint:
+  mode: file_bytes          # file_bytes | content
+  algorithm: sha256
+  content:
+    # content 模式的归一化链（忽略 zip 时间戳/docProps 等易变字段）
+    normalize: [strip_zip_timestamps, strip_docprops, sort_xml_attrs,
+                canonical_json, drop_rels_timestamps]
+
+# 权限闸门（默认 auto，只拦 L3）；优先级 forbidden > require_approval(L3) > 默认 auto
+policy:
+  default: auto
+  require_approval:            # L3：必须问
+    - modify_public_signature  # 改已存在公共接口/签名/导出
+    - change_scope             # 改需求范围/验收标准
+    - modify_schema            # 改 schema/迁移
+    - add_dependency           # 加改依赖
+    - modify_ci_or_config      # 改 CI/config/Dockerfile/lock
+    - delete_file              # 删文件
+    - modify_security_code     # 改安全/鉴权/支付
+    - merge_pr                 # merge PR
+  forbidden:                   # 任何模式都直接拒绝
+    - force_push
+    - push_main_directly
+  record_levels: [L2]          # L2 自动放行但记 logs/change-summary.md
+
+# verify 阶段：输出截断（命令超时取 timeouts.verify_cmd）
+verify:
+  keep_head_lines: 40
+  keep_tail_lines: 40
+
+# 隔离环境：每次运行独立 git worktree + 分支 feat/<task-id>
+sandbox:
+  enabled: true
+  worktree_root: .orch-worktrees
+  branch_prefix: feat
+  base_branch: main
+  cleanup: on_merge
+
+# 断点续跑与预算上限
+runtime:
+  state_dir: specs
+  resume: true
+  max_usd: 5.0                # 花费上限（美元，可被 --max-budget 覆盖）
+  max_llm_calls: 40           # LLM 调用次数上限
+  max_tokens: 200000          # 累计 token 上限
+  max_heal_retries: 3         # 旧键，优先取顶层 max_retry
+  timeout_seconds: 900
+  fingerprint_mode: file_bytes
