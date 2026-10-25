@@ -5,5 +5,11 @@ __pycache__/
 # 编排器隔离工作区（git worktree 产物，勿入库）
 .orch-worktrees/
 
+# 运行期任务目录（每次 run 生成的状态与日志，仅 _template/audit/demo 入库）
+specs/*
+!specs/_template/
+!specs/audit/
+!specs/demo/
+
 # 运行期凭据
 .env
