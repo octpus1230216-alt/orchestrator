@@ -3,6 +3,20 @@
 把「对话挖掘需求 → 生成提示词 → 交给 coding agent 执行 → 验收 → 失败自愈 → 推送 GitHub 开 PR」
 串成一条全自动本地流水线。**只有触发 L3 权限闸门（改公共接口/依赖/CI/删文件等）才会打断你。**
 
+## 解决什么问题
+
+用高级模型直接写代码成本高，用低级模型直接写代码错误率高——可行的分工是
+**「强模型出提示词、低成本 agent 执行代码」**。但这条路径上存在两处机械损耗：
+
+1. **跨平台搬运**：不同 coding agent（Codex / Claude Code / Cursor / Trae / Qoder / Aider）
+   各有 CLI 与能力差异，接入方式不统一，提示词与验收标准需在多个页面间人工复制粘贴。
+2. **反复确认**：需求是否说清、变更是否越界全靠人盯，无法无人值守。
+
+orch 把这两处损耗自动化：编排器自身用强模型（`llm.strong`）做需求挖掘与提示词编译，
+派发给低成本 agent 执行；`adapters/` 层把各家 coding agent 的差异收敛为薄适配器，
+**新增一家只需 3 步、不改 core 代码**；权限闸门与验收闸门保证只读档位不打断、
+危险档位必拦截。
+
 ```
 orch run task-001 --requirement "给登录接口加限流"
         │
@@ -99,6 +113,9 @@ TASK_ID 可省略：新任务给 `--requirement` 时自动生成 `<slug>-<hash8>
 
 ## 4. 新增一家 coding agent（3 步）
 
+**已内置 6 家**：`codex` / `claude_code` / `cursor` / `trae` / `qoder` / `aider`
+（用 `python cli.py agents` 查看各家的 CLI 可用性）。
+
 以新增 `windsurf` 为例，**不需要改 core/ 任何代码**：
 
 1. **加一个薄 adapter**：`adapters/windsurf.py`
@@ -131,7 +148,7 @@ TASK_ID 可省略：新任务给 `--requirement` 时自动生成 `<slug>-<hash8>
 
 ## 5. 权限模型（闸门）
 
-三档判定，优先级 **forbidden > L3 require > 路径升级 > 默认 auto**：
+三档风险分级 + 一层硬拒绝，判定优先级 **forbidden > L3 require > 路径升级 > 默认 auto**：
 
 | 档 | 覆盖 | 行为 |
 |---|---|---|
@@ -212,4 +229,7 @@ python -m unittest discover -s tests -v
 ```
 
 覆盖：adapter 变量替换、prompt 分段、verify 解析、policy 判定（auto/require/forbid）、
-approval 无 TTY 行为、指纹双模式切换（tests/ 共 44 项，标准库零依赖）。
+approval 无 TTY 行为、指纹双模式切换（tests/ 共 **99 个单元测试** + 9 项 e2e 断言，标准库零依赖）。
+
+> 依赖：仅 `pyyaml`（`rich` 可选，装了 `confirm` 交互更好看）。`pip install pyyaml` 后即可运行。
+> e2e 断言需手动执行：`python tests/e2e_stub.py`（使用 stub agent 与本地裸仓库，不依赖外部服务）。
